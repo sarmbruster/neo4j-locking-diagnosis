@@ -8,35 +8,29 @@ import org.neo4j.driver.Driver;
 import org.neo4j.driver.EagerResult;
 import org.neo4j.driver.GraphDatabase;
 import org.neo4j.driver.Record;
-import org.neo4j.driver.Result;
 import org.neo4j.driver.Session;
+import org.neo4j.driver.SimpleQueryRunner;
 import org.neo4j.driver.Transaction;
-import org.neo4j.driver.summary.ResultSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.Neo4jContainer;
 import org.testcontainers.containers.Neo4jLabsPlugin;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.shaded.com.google.common.collect.Iterables;
 import org.testcontainers.utility.DockerImageName;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
-import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -118,35 +112,21 @@ class LockingTest {
 
     @Test
     void testLocking() throws InterruptedException {
-
         driver.executableQuery("CREATE CONSTRAINT FOR (p:Person) REQUIRE p.id IS UNIQUE");
 
-        ScheduledExecutorService scheduledExecutorService = Executors.newScheduledThreadPool(100);
+        ExecutorService executorService = Executors.newFixedThreadPool(100);
         Random random = new Random();
-
-/*            scheduledExecutorService.scheduleAtFixedRate(() -> {
-                driver.executableQuery("""
-                        """);
-            }, 10, 10, TimeUnit.SECONDS);*/
-
 
         List<Callable<String>> tasks = IntStream.range(0, 10000).mapToObj(value -> (Callable<String>) () -> {
             try (Session session = driver.session()) {
+
+                /*// option 1: use managed transaction with auto-retry in case of transient exceptions
+                session.executeWriteWithoutResult(transactionContext -> runPayload(transactionContext, random, value));
+                return null;*/
+
+                // option 2: use self managed transactions. retry is your responsibility here, therefore you will see some exceptions
                 try (Transaction tx = session.beginTransaction()) {
-                    long id1 = Math.round(random.nextGaussian() * 3);
-                    long id2 = Math.round(random.nextGaussian() * 3);
-                    tx.run("""
-                                    MERGE (p1:Person{id:$id1})
-                                    MERGE (p2:Person{id:$id2})
-                                    MERGE (p1)-[r:KNOWS]->(p2)
-                                    SET r.timestamp=localdatetime()
-                                    """,
-                            //WITH p1,p2
-                            //CALL apoc.util.sleep(10)
-                            //""",
-                            Map.of("id1", id1,
-                                    "id2", id2));
-                    logger.debug("run {}: {} -> {}", value, id1, id2);
+                    runPayload(tx, random, value);
                     tx.commit();
                     return null;
                 }
@@ -155,17 +135,16 @@ class LockingTest {
                 return e.getMessage();
             }
         }).collect(Collectors.toList());
-        List<Future<String>> futures = scheduledExecutorService.invokeAll(tasks);
+        List<Future<String>> futures = executorService.invokeAll(tasks);
 
-        List<String> result = futures.stream().map(LockingTest::futureGetAndCatch).filter(Objects::nonNull).toList();
-
-        logger.warn("we have {} locking issues", result.size());
-        for (String s : result ) {
+        List<String> failures = futures.stream().map(LockingTest::futureGetAndCatch).filter(Objects::nonNull).toList();
+        logger.warn("we have {} locking issues", failures.size());
+        for (String s : failures ) {
             logger.info("failure : {}", s);
         }
 
-        scheduledExecutorService.shutdown();
-        assertTrue(scheduledExecutorService.awaitTermination(10, TimeUnit.MINUTES));
+        executorService.shutdown();
+        assertTrue(executorService.awaitTermination(10, TimeUnit.MINUTES));
 
         List<Record> records = driver.executableQuery("""
                 MATCH (n)-->()
@@ -180,8 +159,33 @@ class LockingTest {
                 RETURN count(r)
                 """).execute().records().get(0).get(0).asInt();
         logger.info("we have in total {} relationships", count);
-        //assertEquals(1000, count);
 
+        List<Record> nonUniqueRelationships = driver.executableQuery("""
+                match (a)-->(b)
+                WITH a,b, count(*) as rels
+                WHERE rels>1
+                RETURN a.id, b.id, rels
+                """).execute().records();
+        nonUniqueRelationships.forEach(record -> logger.info("has more than one rels {}", record));
+        assertEquals(0, nonUniqueRelationships.size());
+
+        assertEquals(0, failures.size());
+    }
+
+    private void runPayload(SimpleQueryRunner simpleQueryRunner, Random random, int run) {
+        long id1 = Math.round(random.nextGaussian() * 3);
+        long id2 = Math.round(random.nextGaussian() * 3);
+        simpleQueryRunner.run("""
+                        MERGE (p1:Person{id:$id1})
+                        MERGE (p2:Person{id:$id2})
+                        WITH p1,p2
+                        // if the line below is not present, MERGE might cause duplicates
+                        //CALL apoc.lock.nodes(case when $id1 > $id2 then [p1,p2] else [p2,p1] end)
+                        MERGE (p1)-[r:KNOWS]->(p2)
+                        SET r.timestamp=localdatetime()
+                        """,
+                Map.of("id1", id1,"id2", id2));
+        logger.debug("run {}: {} -> {}", run, id1, id2);
     }
 
     private static String futureGetAndCatch(Future<String> stringFuture) {
