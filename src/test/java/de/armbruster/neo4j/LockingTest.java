@@ -1,6 +1,6 @@
 package de.armbruster.neo4j;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.Driver;
 import org.neo4j.driver.GraphDatabase;
@@ -10,20 +10,17 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 @Testcontainers
-public class LockingTest {
+class LockingTest {
 
     @Container
-    private static Neo4jContainer<?> neo4jContainer = new Neo4jContainer<>(DockerImageName.parse("neo4j:4.4.19"))
-            //.withEnterpriseEdition()
+    private static Neo4jContainer<?>neo4jContainer = new Neo4jContainer<>(DockerImageName.parse("neo4j:4.4.19-enterprise"))
+            .withEnv("NEO4J_ACCEPT_LICENSE_AGREEMENT", "yes")
             .withoutAuthentication();
 
     @Test
-    public void testLocking() {
-        //try (Neo4jContainer<?> neo4jContainer= new Neo4jContainer<>(DockerImageName.parse("neo4j:4.4.19")).withoutAuthentication().withEnterpriseEdition()) {
-            //neo4jContainer.start();
-            try (Driver driver = GraphDatabase.driver(neo4jContainer.getBoltUrl(), AuthTokens.none())) {
-                System.out.println("HURZ");
-            }
-        //}
+    void testLocking() {
+        try (Driver driver = GraphDatabase.driver(neo4jContainer.getBoltUrl(), AuthTokens.none())) {
+            System.out.println(driver.executableQuery("return 1").execute().toString());
+        }
     }
 }
