@@ -2,6 +2,7 @@ package de.armbruster.neo4j;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.Driver;
@@ -60,6 +61,7 @@ class LockingTest {
         }
     }
 
+    @Disabled("non useful example with explicit threads, keeping here as a reference")
     @Test
     void testSimple() throws InterruptedException {
         EagerResult result = driver.executableQuery("""
