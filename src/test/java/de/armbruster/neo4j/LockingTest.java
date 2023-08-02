@@ -120,16 +120,31 @@ class LockingTest {
         List<Callable<String>> tasks = IntStream.range(0, 10000).mapToObj(value -> (Callable<String>) () -> {
             try (Session session = driver.session()) {
 
-                /*// option 1: use managed transaction with auto-retry in case of transient exceptions
-                session.executeWriteWithoutResult(transactionContext -> runPayload(transactionContext, random, value));
-                return null;*/
-
-                // option 2: use self managed transactions. retry is your responsibility here, therefore you will see some exceptions
+                // option 1: use self managed transactions. retry is your responsibility here, therefore you will see some exceptions
                 try (Transaction tx = session.beginTransaction()) {
                     runPayload(tx, random, value);
                     tx.commit();
                     return null;
                 }
+
+                // option 2: self managed + naive retry logic
+/*                boolean status = false;
+                do {
+                    try (Transaction tx = session.beginTransaction()) {
+                        runPayload(tx, random, value);
+                        tx.commit();
+                        status = true;
+                    } catch (TransientException te) {
+                        logger.info("transient error, retrying: {}", te.getMessage());
+                    }
+                } while (!status);
+                return null;*/
+
+                /*
+                // option 3: use managed transaction with auto-retry in case of transient exceptions
+                session.executeWriteWithoutResult(transactionContext -> runPayload(transactionContext, random, value));
+                return null;*/
+
             } catch (Exception e) {
                 logger.error("OOPS", e);
                 return e.getMessage();
@@ -167,7 +182,7 @@ class LockingTest {
                 RETURN a.id, b.id, rels
                 """).execute().records();
         nonUniqueRelationships.forEach(record -> logger.info("has more than one rels {}", record));
-        assertEquals(0, nonUniqueRelationships.size());
+        assertEquals(0, nonUniqueRelationships.size(), "found non unique relationships");
 
         assertEquals(0, failures.size());
     }
